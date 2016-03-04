@@ -1,7 +1,0 @@
-file=$1
-cat >1 <<END
-/* Author Dunzhu Li  dli@caltech.edu 
-*/
-`cat $file`
-END
-mv 1 $file

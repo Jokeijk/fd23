@@ -1,0 +1,182 @@
+#include "../param/param.h"
+#include "waveform.h"
+#include<cmath>
+#include<fstream>
+
+void compute_QW(double r,double z,double pvel,double svel,double den,double dt,int nt,double *Q,double *W,double *T1,double *T2,char comp,double A1,double A2,double A3)
+{
+  double R=sqrt(r*r+z*z);
+
+  double Ga=sqrt(2.0)/(4.0*PI*PI*den);
+  double Gb=sqrt(2.0)/(4.0*PI*PI*den);
+
+  int n1_a=floor(R/pvel/dt);
+  int n1_b=floor(R/svel/dt);
+
+  double a=(n1_a+1)-R/pvel/dt+0.5;
+  double b=(n1_b+1)-R/svel/dt+0.5;
+
+  double first_a=sqrt(a*(2.0*R/pvel/dt+a));
+  double first_b=sqrt(b*(2.0*R/svel/dt+b));
+
+  for(int i=0;i<=n1_a;i++) T1[i]=0;
+  for(int i=0;i<=n1_b;i++) T2[i]=0;
+
+
+  double R6=R*R*R*R*R*R;
+
+  double t_a=(n1_a+1)*dt; T1[n1_a+1]=first_a*Ga*(t_a*t_a/(R6));
+  double t_b=(n1_b+1)*dt; T2[n1_b+1]=first_b*Gb*(t_b*t_b/(R6));
+
+  for(int i=n1_a+2;i<nt;i++) {
+	double t=i*dt;
+	double ta=(1.0/(t*pvel)*R)*(1.0/(t*pvel)*R);
+	T1[i]=1./(sqrt(1.0-ta))*Ga*(t*t/(R6));
+//	T1[i]=1./(sqrt(1.0-ta))*Ga*((R/pvel)*(R/pvel)/(R6));
+  }
+
+  for(int i=n1_b+2;i<nt;i++) {
+	double t=i*dt;
+	double tb=(1.0/(t*svel)*R)*(1.0/(t*svel)*R);
+	T2[i]=1./(sqrt(1.0-tb))*Gb*(t*t/(R6));
+//	T2[i]=1./(sqrt(1.0-tb))*Gb*((R/svel)*(R/svel)/(R6));
+  }
+  // T1,T2 is now Phia,Phib
+
+  if(comp=='W'){
+	for(int i=0;i<n1_a;i++) W[i]=0.0;
+
+	for(int i=n1_a;i<nt;i++){
+	  double t=i*dt;
+	  double Phia=T1[i];
+	  double Phib=T2[i];
+	  double Ta=(1.0/(t*pvel)*R)*(1.0/(t*pvel)*R);
+	  double Tb=(1.0/(t*svel)*R)*(1.0/(t*svel)*R);
+
+#define W1 \
+	  (-z*(Phia*(z*z-3.0f*r*r+Ta*(2.0f*r*r-z*z))\
+		   +Phib*(3.0f*r*r-z*z+Tb*(z*z-2.0f*r*r))))
+
+#define W2 \
+	  (-r*(Phia*(2.0f*r*r-6.0f*z*z+Ta*(4.0f*z*z-2.0f*r*r))\
+		   +Phib*(6.0f*z*z-2*r*r+Tb*(r*r-5.0f*z*z))))
+
+#define W3 \
+	  (-z*(Phia*(9.0f*r*r-3.0f*z*z+Ta*(z*z-8.0f*r*r))\
+		   +Phib*(3.0f*z*z-9.0f*r*r+Tb*(6.0f*r*r-3.0f*z*z))))
+
+	  W[i]=(A1*W1-A2*W2+A3*W3);
+	}
+  }
+  if(comp=='Q'){
+	for(int i=0;i<n1_a;i++) Q[i]=0.0;
+
+	for(int i=n1_a;i<nt;i++){
+	  double t=i*dt;
+	  double Phia=T1[i];
+	  double Phib=T2[i];
+	  double Ta=(1.0/(t*pvel)*R)*(1.0/(t*pvel)*R);
+	  double Tb=(1.0/(t*svel)*R)*(1.0/(t*svel)*R);
+
+#define Q1\
+	  (r*(Phia*(r*r-3*z*z+3*Ta*z*z)\
+		  +Phib*(3*z*z-r*r+Tb*(r*r-2*z*z))))
+
+#define Q2\
+	  (z*(Phia*(6*r*r-2*z*z+Ta*(2*z*z-4*r*r))\
+		  +Phib*(2*z*z-6*r*r+Tb*(5*r*r-z*z))))
+
+#define Q3\
+	  (r*(Phia*(9*z*z-3*r*r+Ta*(2*r*r-7*z*z))\
+		  +Phib*(3*r*r-9*z*z+Tb*(6*z*z-3*r*r))))
+
+	  Q[i]=(A1*Q1-A2*Q2+A3*Q3);
+	}
+  }
+
+}
+void cu_con(int N1,double *f1,int N2,double *f2);
+int main(int ac,char **av) 
+{
+  double src_shift_x= 0.25;
+  double src_shift_z=-0.25;
+  PARAM param;
+  param.read_param(ac,av,"source");
+
+  int bw=param.bw;
+  double pvel=param.srcpvel;
+  double svel=param.srcsvel;
+  double den=param.srcden;
+  double dt=param.dt;
+  double h=param.h;
+  int nt=param.nt;
+
+  double delta=param.dip*PI/180.0;
+  double lamda=param.rake*PI/180.0;
+  double theta=(param.azimuth-param.strike)*PI/180.0;
+
+  double A1=sin(2.0*theta)*cos(lamda)*sin(delta)+1.0/2.0*cos(2.0*theta)*sin(lamda)*sin(2.0*delta);
+  double A2=cos(theta)*cos(lamda)*cos(delta)-sin(theta)*sin(lamda)*cos(2.0*delta);
+  double A3=1.0/2.0*sin(lamda)*sin(2.0*delta);
+  
+  double *src;
+  int lsrc;
+  
+
+  if(param.sourcetime[0]=='T' || param.sourcetime[0]=='t'){
+	trapozoid(dt,param.trap1,param.trap2,param.trap3,lsrc,src);
+  }else if(param.sourcetime[0]=='G' || param.sourcetime[0]=='g'){
+	gaussian(dt,param.alpha ,lsrc,src);
+  }
+
+  int space=(bw+8)*(bw+8);
+  int idxend=(bw+1)/2+4;  // index,or position of txx,tzz
+  int idxstart=idxend+1-(bw+8);
+  double *Q=new double[nt*space];
+  double *W=new double[nt*space];
+  double *T1=new double[nt];
+  double *T2=new double[nt];
+  int k=-1;
+  for(int isz=idxstart;isz<=idxend;isz++){
+	  for(int isx=idxstart;isx<=idxend;isx++){
+		// source is src_shift_x,src_shift_z,
+		// u is at (isx+0.5,isz)
+		k=k+1;
+		double x=(isx+0.5)-(src_shift_x);
+	  	double z=isz-src_shift_z;
+        compute_QW( x*h, z*h, pvel, svel, den, dt, nt, Q+k*nt, W+k*nt, T1, T2,'Q', A1, A2, A3);
+        cu_con(lsrc,src,nt,Q+k*nt);
+
+		/*
+		printf("lsrc and nt is:%d,%d",lsrc,nt);
+		std::ofstream tempfid;
+		tempfid.open("temp",std::ios::binary);
+		tempfid.write((char*)Q,sizeof(double)*nt);
+		tempfid.write((char*)src,sizeof(double)*lsrc);
+		tempfid.write((char*)Q,sizeof(double)*nt);
+		tempfid.close();
+		return 0;
+		*/
+
+		// w is at (isx,isz-0.5)
+		x=isx-src_shift_x;
+	  	z=(isz-0.5)-src_shift_z;
+        compute_QW( x*h, z*h, pvel, svel, den, dt, nt, Q+k*nt, W+k*nt, T1, T2,'W', A1, A2, A3);
+        cu_con(lsrc,src,nt,W+k*nt);
+	  }
+  }
+
+  std::ofstream fid;
+  fid.open(param.sourcefile,std::ios::binary);
+
+  double *buf=new double[2*space];
+  for(int it=0;it<nt;it++){
+	for(int i=0;i<space;i++){
+	  buf[i]=Q[it+i*nt];
+	  buf[i+space]=W[it+i*nt];
+	}
+	fid.write((char*)buf,sizeof(double)*2*space);
+  }
+  fid.close();
+  printf("finish!");
+}
